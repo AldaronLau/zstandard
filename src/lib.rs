@@ -2,8 +2,14 @@ use std::convert::TryInto;
 
 // ZStd magic number.
 const MAGIC_NUMBER: u32 = 0xFD2FB528;
-// Same as BufReader from the Rust standard library
-const BUFFER_SIZE: u16 = 8_000;
+// Hardcoded 16 KB For Encoding
+const WINDOW_SIZE: u16 = 16_000;
+
+enum BlockType {
+    RawBlock,
+    RleBlock,
+    ZstdBlock,
+}
 
 pub enum Error {
     /// Magic number does not match
@@ -12,6 +18,10 @@ pub enum Error {
     FrameHeaderDesc,
     /// Window size is too large or too small.
     WindowSize,
+    /// There were no blocks in the frame.
+    NoBlocks,
+    /// Block type is not a valid block type (reserved value used).
+    InvalidBlockType,
 }
 
 type Result<T> = std::result::Result<T, Error>;
@@ -26,6 +36,11 @@ fn decode_u64(input: &[u8]) -> u64 {
 #[inline(always)]
 fn decode_u32(input: &[u8]) -> u32 {
     u32::from_le_bytes([input[0], input[1], input[2], input[3]])
+}
+
+#[inline(always)]
+fn decode_u24(input: &[u8]) -> u32 {
+    u32::from_le_bytes([input[0], input[1], input[2], 0])
 }
 
 #[inline(always)]
@@ -157,11 +172,63 @@ impl Frame {
         }
 
         // Allocate buffer
-        let mut data = vec![0; window_size.try_into().unwrap()];
+        let mut data = Vec::with_capacity(window_size.try_into().unwrap());
 
         ///////////////////// Data_Block(s) ////////////////////
 
         // FIXME:
+
+        let block_header = decode_u24(input);
+        let mut last_block = (block_header & 1) != 0;
+        let mut block_type = match block_header & 0b0110 {
+            0b000 => BlockType::RawBlock,
+            0b010 => BlockType::RleBlock,
+            0b100 => BlockType::ZstdBlock,
+            _ => return Err(Error::InvalidBlockType),
+        };
+        if last_block {
+            return Err(Error::NoBlocks);
+        }
+        let mut block_size = ((block_header >> 3) as usize).min(128_000);
+        input = &input[3..];
+
+        loop {
+            // Decode this block.
+            match block_type {
+                BlockType::RawBlock => {
+                    // No decompression necessary
+                    data.extend(input.iter().cloned().take(block_size));
+                    input = &input[block_size..];
+                }
+                BlockType::RleBlock => {
+                    // Run length decompression of a single byte
+                    for i in 0..block_size {
+                        data.push(input[0]);
+                    }
+                    input = &input[1..];
+                }
+                BlockType::ZstdBlock => {
+                    // ZStandard decompression
+                    
+                    // Literals section
+                }
+            }
+
+            // Check if there are more blocks
+            if last_block {
+                break;
+            }
+            let block_header = decode_u24(input);
+            last_block = (block_header & 1) != 0;
+            block_type = match block_header & 0b0110 {
+                0b000 => BlockType::RawBlock,
+                0b010 => BlockType::RleBlock,
+                0b100 => BlockType::ZstdBlock,
+                _ => return Err(Error::InvalidBlockType),
+            };
+            block_size = ((block_header >> 3) as usize).min(128_000);
+            input = &input[3..];
+        }
 
         ///////////////////// Content_Checksum ////////////////////
 
