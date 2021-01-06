@@ -186,7 +186,7 @@ impl Frame {
         }
 
         // Allocate buffer
-        let mut data = vec![0, window_size.try_into().unwrap()];
+        let mut data = vec![0; window_size.try_into().unwrap()];
 
         ///////////////////// Data_Block(s) ////////////////////
 
