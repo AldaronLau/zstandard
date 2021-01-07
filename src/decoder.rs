@@ -2,7 +2,7 @@ use std::io::{Read, Error as IoError};
 
 use super::Frame;
 
-/// A ZStandard Stream Decoder that implements [`Read`](std::io::Read).
+/// A ZStandard Stream Decoder that implements [`Read`](std::io::Read)
 pub struct Decoder<R: Read>(R, Frame, usize);
 
 impl<R: Read> Decoder<R> {

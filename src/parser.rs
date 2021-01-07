@@ -1,6 +1,7 @@
 //! 
 
 // TODO: Separate out into a library that can be additionally used by png_pong
+#![allow(unused)]
 
 use std::io::{Result, Read};
 use std::ops::{BitOrAssign, Shl};

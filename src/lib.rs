@@ -1,3 +1,6 @@
+//! ZStandard compression format encoder and decoder implemented in pure Rust
+//! without unsafe.
+
 // Reference: https://github.com/facebook/zstd/blob/dev/doc/zstd_compression_format.md#frame_header
 
 // FIXME
@@ -8,10 +11,12 @@ use std::error::Error;
 use std::io::{Read, Write, Error as IoErr, ErrorKind as Kind};
 use std::fmt::{Display, Formatter, Error as FmtError};
 
+mod encoder;
 mod decoder;
 mod parser;
 
 pub use decoder::Decoder;
+pub use encoder::Encoder;
 use parser::LeDecoder;
 
 /*
@@ -21,8 +26,6 @@ use parser::LeDecoder;
 
 // ZStd magic number.
 const MAGIC_NUMBER: u32 = 0xFD2FB528;
-// Hardcoded 16 KB For Encoding
-const WINDOW_SIZE: u16 = 16_000;
 
 #[derive(PartialEq)]
 enum BlockType {
@@ -51,6 +54,7 @@ enum DecError {
 
 impl Display for DecError {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), FmtError> {
+        use DecError::*;
         let message = match self {
             MagicNumber => "Magic number does not match",
             FrameHeaderDesc => "Invalid values in the frame header descriptor.",
@@ -71,18 +75,17 @@ impl From<DecError> for IoErr {
     }
 }
 
-/// 
 #[derive(Default)]
-pub struct Frame {
+struct Frame {
     data: Vec<u8>,
 }
 
 impl Frame {
-    fn encode(self, output: &mut Vec<u8>) {
+    fn encode<W: Write>(&mut self, writer: &mut W) -> Result<(), IoErr> {
         ///////////////////// Magic_Number ////////////////////
 
         let data = &self.data[..];
-        output.extend(MAGIC_NUMBER.to_le_bytes().iter());
+        writer.write_all(&MAGIC_NUMBER.to_le_bytes())?;
 
         ///////////////////// Frame_Header ////////////////////
         
@@ -92,18 +95,21 @@ impl Frame {
         // Single segment
         // No Checksum
         // No Dictionary
-        output.push(frame_head_desc);
+        writer.write_all(&[frame_head_desc])?;
         
         ///////////////////// Data_Block(s) ////////////////////
         
-        // FIXME
+        todo!();
         
         ///////////////////// Content_Checksum ////////////////////
 
-        // FIXME
+        todo!();
+
+        self.data.clear();
+        Ok(())
     }
     
-    fn decode<R: Read>(&mut self, reader: &mut R) -> Result<Frame, IoErr> {
+    fn decode<R: Read>(&mut self, reader: &mut R) -> Result<(), IoErr> {
         let mut dec = LeDecoder::new(reader);
 
         ///////////////////// Magic_Number ////////////////////
@@ -185,8 +191,8 @@ impl Frame {
             Err(DecError::WindowSize)?
         }
 
-        // Allocate buffer
-        let mut data = vec![0; window_size.try_into().unwrap()];
+        // Resize buffer (to be overwritten)
+        self.data.resize(window_size.try_into().unwrap(), 0);
 
         ///////////////////// Data_Block(s) ////////////////////
 
@@ -204,7 +210,7 @@ impl Frame {
             Err(DecError::NoBlocks)?
         }
         let mut block_size = ((block_header >> 3) as usize).min(128_000);
-        let mut buf = &mut data[..];
+        let mut buf = &mut self.data[..];
 
         loop {
             // Decode this block.
@@ -237,10 +243,10 @@ impl Frame {
                         _ => unreachable!(),
                     };
                     use LiteralType::*;
-                    match literal_type {
+                    let (regenerated_size, compressed_size, four_huffman_streams) = match literal_type {
                         Rle | Raw => {
                             // Size format uses 1 or 2 bits.
-                            let regenerated_size = match first_nibble & 0b1100 {
+                            let rs = match first_nibble & 0b1100 {
                                 // 1 Bit (Regenerated Size: u5)
                                 0b0000 | 0b1000 => dec.u(5, 5)?,
                                 // 2 Bit (Regenerated Size: u12)
@@ -250,41 +256,59 @@ impl Frame {
 
                                 _ => unreachable!(),
                             };
-
-                            todo!();
+                            (rs, None, false)
                         }
                         HuffmanTree | HuffmanTreeless => {
                             // Size format always uses 2 bits.
-                            let (regenerated_size, compressed_size) = match first_nibble & 0b1100 {
+                            let (rs, cs, fh) = match first_nibble & 0b1100 {
                                 // 3 Byte Header
                                 // Single Stream: Regenerated Size: u10
-                                0b0000 => (dec.u(10, 4), dec.u(10, 2)),
+                                0b0000 => (dec.u(10, 4)?, dec.u(10, 2)?, false),
                                 // 4 Streams: Regenerated Size: u10
-                                0b0100 => (dec.u(10, 4), dec.u(10, 2)),
-                                
+                                0b0100 => (dec.u(10, 4)?, dec.u(10, 2)?, true),
+
                                 // 4 Byte Header
                                 // 4 Streams: Regenerated Size: u14
-                                0b1000 => (dec.u(14, 4), dec.u(14, 6)),
+                                0b1000 => (dec.u(14, 4)?, dec.u(14, 6)?, true),
 
                                 // 5 Byte Header
                                 // 4 Streams: Regenerated Size: u18
-                                0b1100 => (dec.u(18, 4), dec.u(18, 2)),
+                                0b1100 => (dec.u(18, 4)?, dec.u(18, 2)?, true),
 
                                 _ => unreachable!(),
                             };
-
-                            todo!()
+                            (rs, Some(cs), fh)
                         }
-                    }
+                    };
                     
-                    /*// Huffman tree description
-                    let total_streams_size = if literal_type == LiteralType::HuffmanTree {
-                        
+                    // Huffman tree description
+                    if literal_type == LiteralType::HuffmanTree {
+                        todo!();
+                    }
 
-                        compressed_size - huffman_tree_description_size
+                    // Jump Table: compressed sizes of first three streams.
+                    let jump_table = if four_huffman_streams {
+                        Some([dec.u16()?, dec.u16()?, dec.u16()?])
                     } else {
-                        compressed_size
-                    };*/
+                        None
+                    };
+
+                    // Stream1
+                    todo!();
+                    
+                    // Streams 2 thru 4
+                    
+                    todo!();
+                    
+                    //////////// Sequences section //////////
+
+                    todo!();
+
+                    //////////// **Sequence Execution** //////////// 
+                    // Now that we've calculated the literals and sequences, we
+                    // can turn it into data.
+
+                    todo!();
                 }
             }
 
@@ -307,17 +331,7 @@ impl Frame {
 
         // FIXME:
 
-        Ok(Frame { data })
-    }
-}
-
-/// A ZStandard Stream Encoder
-pub struct Encoder<W: Write>(W, Frame);
-
-impl<W: Write> Encoder<W> {
-    /// Create a new ZStandard stream encoder that writes to a `Write`r.
-    pub fn new(writer: W) -> Self {
-        Self(writer, Frame::default())
+        Ok(())
     }
 }
 

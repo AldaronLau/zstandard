@@ -10,7 +10,7 @@ fn main() -> std::io::Result<()> {
     let mut decoded = Vec::new();
     // Read into decoded.
     decoder.read_to_end(&mut decoded)?;
-    
+
     // Open original data file.
     let orig = std::fs::read("./testfiles/z000000")?;
 
