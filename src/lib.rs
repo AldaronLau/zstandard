@@ -16,6 +16,7 @@ use std::convert::TryInto;
 use std::error::Error;
 use std::io::{Read, Write, Error as IoErr, ErrorKind as Kind};
 use std::fmt::{Display, Formatter, Error as FmtError};
+use std::cmp::Ord;
 
 mod encoder;
 mod decoder;
@@ -30,10 +31,68 @@ use parser::LeDecoder;
  *
 */
 
+// A tree of prefix codes.
+struct HuffmanTreeBuilder {
+    literal: u8,
+    // List of weight, value.
+    list: Vec<(u8, u8)>,
+}
+
+impl HuffmanTreeBuilder {
+    /// Create an empty huffman tree builder.
+    pub fn new() -> Self {
+        Self {
+            literal: 0,
+            list: Vec::new(),
+        }
+    }
+
+    /// Add a weight for the next literal.
+    pub fn weight(&mut self, weight: u8) {
+        if weight != 0 {
+            self.list.push((weight, self.literal));
+        }
+        self.literal += 1;
+    }
+
+    // FIXME https://github.com/facebook/zstd/blob/dev/doc/zstd_compression_format.md#representation
+    /*/// Finish building the Huffman tree.
+    pub fn finish(self) -> HuffmanTree {
+        // Stable sort by weight, secondary sort by natural seq. order stays.
+        self.list.sort_by(|a, b| a.0.cmp(b.0));
+        // Initialize empty huffman tree.
+        let mut tree = HuffmanTree {
+            list: Vec::new(),
+        };
+        // 
+        let mut old_weight = 0;
+        let mut counter = 0;
+        for (weight, value) in self.list {
+            number_of_bits(max_bits, weight);
+        }
+        // Return the created tree
+        tree
+    }*/
+}
+
+struct HuffmanTree {
+    // List of bits, bit sequence, value.
+    list: Vec<(u8, u8, u8)>,
+}
+
+// Get the number of bits for a weight.
+fn number_of_bits(max_bits: u8, weight: u8) -> u8 {
+    if weight > 0 {
+        max_bits + 1 - weight
+    } else {
+        0
+    }
+}
+
 fn huffman_stream(stream: &[u8]) {
     let mut stream = stream.iter();
     while let Some(byte) = stream.next_back() {
-        
+        todo!()
     }
 }
 
@@ -294,12 +353,44 @@ impl Frame {
                         }
                     };
                     
-                    // Huffman tree description
-                    if literal_type == LiteralType::HuffmanTree {
-                        todo!();
-                    }
+                    // Huffman tree description (compressed size include this).
+                    let tree = if literal_type == LiteralType::HuffmanTree {
+                        // FIXME: Use HuffmanTreeBuilder (Next thing to do).
+                        let mut tree = Vec::new();
+                    
+                        let header_byte = dec.u8()?;
+                        if header_byte >= 128 { // List of 4 bit weights
+                            // 0 upto 128 are possible literal values.
+                            let num_weights = header_byte - 127;
+                            tree.reserve_exact(num_weights.into());
+                            for _ in 0..num_weights >> 1 {
+                                let byte = dec.u8()?;
+                                tree.push(byte >> 4);
+                                tree.push(byte & 0xf);
+                            }
+                            if num_weights & 1 != 0 {
+                                let byte = dec.u8()?;
+                                tree.push(byte >> 4);
+                            }
+                        } else { // List of FSE-compressed weights
+                            let compressed_size = header_byte;
+                            tree.reserve_exact(255);
+                            
+                            // decompress using finite state entropy bitstream
+                            // FSE HEADER
+                            let first_byte = dec.u8()?;
+                            let accuracy_log = (first_byte & 0xF) + 5;
+                            
+                            todo!()
+                        }
+                    
+                        Some(tree)
+                    } else {
+                        None
+                    };
 
-                    // Jump Table: compressed sizes of first three streams.
+                    // Jump Table: compressed sizes of first three streams
+                    // (compressed size include this as well).
                     let jump_table = if four_huffman_streams {
                         Some([dec.u16()?, dec.u16()?, dec.u16()?])
                     } else {
@@ -311,7 +402,6 @@ impl Frame {
                         let mut streams = vec![0; compressed_size as usize];
                         dec.bytes(&mut streams)?;
                         if let Some(jump_table) = jump_table {
-                            println!("{}, {}", jump_table[0], streams.len());
                             huffman_stream(&streams[..jump_table[0].into()]);
                             huffman_stream(&streams[..jump_table[1].into()]);
                             huffman_stream(&streams[..jump_table[2].into()]);
