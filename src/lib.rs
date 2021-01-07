@@ -3,6 +3,12 @@
 
 // Reference: https://github.com/facebook/zstd/blob/dev/doc/zstd_compression_format.md#frame_header
 
+#![doc(
+    html_logo_url = "https://raw.githubusercontent.com/facebook/zstd/dev/doc/images/zstd_logo86.png",
+    html_favicon_url = "https://raw.githubusercontent.com/facebook/zstd/dev/doc/images/zstd_logo86.png",
+    html_root_url = "https://docs.rs/zstandard"
+)]
+
 // FIXME
 #![allow(unreachable_code)]
 
@@ -23,6 +29,13 @@ use parser::LeDecoder;
  *
  *
 */
+
+fn huffman_stream(stream: &[u8]) {
+    let mut stream = stream.iter();
+    while let Some(byte) = stream.next_back() {
+        
+    }
+}
 
 // ZStd magic number.
 const MAGIC_NUMBER: u32 = 0xFD2FB528;
@@ -293,12 +306,20 @@ impl Frame {
                         None
                     };
 
-                    // Stream1
-                    todo!();
-                    
-                    // Streams 2 thru 4
-                    
-                    todo!();
+                    // Decode Streams
+                    if let Some(compressed_size) = compressed_size {
+                        let mut streams = vec![0; compressed_size as usize];
+                        dec.bytes(&mut streams)?;
+                        if let Some(jump_table) = jump_table {
+                            println!("{}, {}", jump_table[0], streams.len());
+                            huffman_stream(&streams[..jump_table[0].into()]);
+                            huffman_stream(&streams[..jump_table[1].into()]);
+                            huffman_stream(&streams[..jump_table[2].into()]);
+                            huffman_stream(&streams[..]);
+                        } else {
+                            huffman_stream(&streams[..]);
+                        }
+                    }
                     
                     //////////// Sequences section //////////
 

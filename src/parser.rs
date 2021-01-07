@@ -18,23 +18,30 @@ impl<R: Read> LeDecoder<R> {
 
     /// Unaligned read of arbitrary bit length up to 32.
     #[inline(always)]
-    pub fn u(&mut self, mut bits: u8, mut leftover: u8) -> Result<u32> {
-        // Write bits from previous read into output int.
-        let mut output: u32 = (self.1[0] >> leftover).into();
-        bits -= leftover;
-        // Do offset'd "aligned" reads.
-        let full_bytes = bits >> 3;
-        let mut buf = &mut [0; 4][0..full_bytes.into()];
-        self.0.read_exact(buf)?;
-        output |= aligned_le::<u32>(buf) << leftover;
-        leftover += full_bytes;
-        // Remaining reads.
-        let extra_bits = bits & 0b111;
-        if extra_bits != 0 {
+    pub fn u(&mut self, bits: u8, mut leftover: u8) -> Result<u32> {
+        // Write leftover bits (most significant in least significant place).
+        let mut output = if leftover != 0 {
+            self.1[0] as u32 >> (8 - leftover)
+        } else { 0 };
+
+        // Write bytes with full cover.
+        let rest = bits - leftover;
+        for i in 0..rest >> 3 {
             self.0.read_exact(&mut self.1)?;
-            output |= (self.1[0] as u32 >> extra_bits) << leftover;
+            output |= (self.1[0] as u32) << leftover;
+            leftover += 8;
         }
-        Ok(output)
+
+        // Write portion of next least significant bits to the right in more
+        // significant place).
+        let rest = bits - leftover;
+        if rest != 0 {
+            self.0.read_exact(&mut self.1)?;
+            output |= (((self.1[0] << (8 - rest)) >> (8 - rest)) as u32) << leftover;
+        }
+
+        // Convert to Little Endian.
+        Ok(u32::from_le(output))
     }
 
     /// Aligned read of u8.
@@ -108,4 +115,33 @@ fn aligned_le<T: From<u8> + BitOrAssign + Shl<usize, Output = T>>(buf: &[u8]) ->
         output |= b << (i << 3);
     }
     output
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::Cursor;
+    use super::LeDecoder;
+
+    #[test]
+    fn decode_32() {
+        let mut reader = Cursor::new(&[10, 0, 0, 0]);
+        let mut dec = LeDecoder::new(&mut reader);
+
+        assert_eq!(dec.u32().unwrap(), 10);
+    }
+
+    #[test]
+    fn decode_arbitrary() {
+        // 4 bit, 8 bit LE, 4 bit
+        let mut reader = Cursor::new(&[0b1100_0010, 0b0011_1101]);
+        let mut dec = LeDecoder::new(&mut reader);
+        
+        let a = dec.u(4, 0).unwrap();
+        let b = dec.u(8, 4).unwrap();
+        let c = dec.u(4, 4).unwrap();
+
+        assert_eq!(0b0010, a);
+        assert_eq!(0b1101_1100, b);
+        assert_eq!(0b0011, c);
+    }
 }
